@@ -1,0 +1,27 @@
+# Prometheus — scrape config for the standalone observability stack.
+# Scrapes the stack's own components plus any app services you point it at.
+# App targets are deployment-specific: add them under `scrape_configs` (or via
+# file_sd/service discovery). The collector also remote-writes OTLP metrics here.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    stack: observability
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Collector pipeline metrics (accepted/refused/exported spans, logs, points).
+  - job_name: otel-collector
+    static_configs: [{ targets: ["otel-collector:8888"] }]
+
+  # The gateway's own RED metrics (if it exposes /metrics in your build).
+  - job_name: obs-gateway
+    static_configs: [{ targets: ["obs-gateway:8080"] }]
+
+  # ── Your application services ────────────────────────────────────────────
+  # Point these at each service's /metrics. Example:
+  # - job_name: my-service
+  #   static_configs: [{ targets: ["my-service:8000"] }]

@@ -1,0 +1,17 @@
+# Local env (copy from .env.example)
+.env
+
+# Python
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.venv/
+**/venv/
+**/*.egg-info/
+**/.coverage
+**/htmlcov/
+
+# Local data (if bind-mounted)
+**/data/

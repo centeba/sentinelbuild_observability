@@ -1,0 +1,76 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "title": "Observability — Overview",
+  "uid": "obs-overview",
+  "tags": ["observability"],
+  "time": { "from": "now-1h", "to": "now" },
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "templating": {
+    "list": [
+      {
+        "name": "job",
+        "label": "Service",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "obs-prometheus" },
+        "query": "label_values(http_request_duration_seconds_count, job)",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "title": "Request rate (req/s)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "obs-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (job) (rate(http_request_duration_seconds_count{job=~\"$job\"}[5m]))",
+          "legendFormat": "{{job}}"
+        }
+      ]
+    },
+    {
+      "title": "Error rate (5xx %)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "obs-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * sum by (job) (rate(http_request_duration_seconds_count{job=~\"$job\",status=~\"5..\"}[5m])) / clamp_min(sum by (job) (rate(http_request_duration_seconds_count{job=~\"$job\"}[5m])), 1)",
+          "legendFormat": "{{job}}"
+        }
+      ]
+    },
+    {
+      "title": "Latency p95 (s)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "obs-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (job, le) (rate(http_request_duration_seconds_bucket{job=~\"$job\"}[5m])))",
+          "legendFormat": "{{job}}"
+        }
+      ]
+    },
+    {
+      "title": "Logs",
+      "type": "logs",
+      "datasource": { "type": "loki", "uid": "obs-loki" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "options": { "showTime": true, "wrapLogMessage": true, "dedupStrategy": "none" },
+      "targets": [{ "refId": "A", "expr": "{service_name=~\".+\"} | json" }]
+    }
+  ]
+}
