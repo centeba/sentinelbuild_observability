@@ -5,6 +5,7 @@ Self-contained FastAPI service:
   (tenant/user from an optional JWT) and forwarded to the collector as OTLP.
 - ``GET /status`` — fleet health across configured services.
 - ``GET /health`` (liveness) / ``GET /healthz`` (readiness) — the gateway's own.
+- ``GET /metrics`` — the gateway's own Prometheus metrics.
 
 No host-platform imports; everything is driven by ``OBS_*`` env vars.
 """
@@ -13,7 +14,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -22,6 +23,7 @@ from .config import settings
 from .emit import emitter
 from .health import router as health_router
 from .ingest import router as ingest_router
+from .metrics import metrics_response, record_request
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 
@@ -70,8 +72,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="obs-gateway", version="0.2.0", lifespan=lifespan)
 
-# Last added is outermost: CORS -> body-size limit -> routes.
+# Last added is outermost: CORS -> metrics -> body-size limit -> routes.
 app.add_middleware(BodySizeLimit)
+app.middleware("http")(record_request)
 if settings.cors_allow_origins:
     app.add_middleware(
         CORSMiddleware,
@@ -96,3 +99,8 @@ async def healthz() -> JSONResponse:
     """Readiness. The gateway is stateless (forwards OTLP, fans out health), so
     readiness == liveness; kept distinct for probe-convention parity."""
     return JSONResponse({"status": "ok", "service": settings.service_name})
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics() -> Response:
+    return metrics_response()

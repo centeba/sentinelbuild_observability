@@ -2,15 +2,18 @@
 
 Frontend telemetry is accepted anonymously (crashes/RUM happen pre-login); when a
 bearer token IS present and JWT verification is configured, the tenant/user are
-extracted from it and attached to the events. Service->gateway calls may be
-gated by a shared internal key. Nothing here is host-specific — claim names and
-keys are configuration.
+extracted from it and attached to the events. Service->gateway calls (``/status``)
+may be gated by a shared internal key. Nothing here is host-specific — claim
+names and keys are configuration.
 """
 
+import functools
 import hmac
 import logging
 from dataclasses import dataclass
 
+import jwt
+from fastapi import Header, HTTPException
 from jwt.types import Options
 
 from .config import settings
@@ -30,6 +33,13 @@ class Principal:
 ANONYMOUS = Principal()
 
 
+@functools.cache
+def _jwk_client(url: str) -> jwt.PyJWKClient:
+    # Pre-existing bug fixed: a new PyJWKClient was built per request, so every
+    # authenticated ingest re-fetched the JWKS. One client per URL caches keys.
+    return jwt.PyJWKClient(url)
+
+
 def principal_from_bearer(authorization: str | None) -> Principal:
     """Best-effort decode of a ``Bearer`` token into a Principal.
 
@@ -43,17 +53,15 @@ def principal_from_bearer(authorization: str | None) -> Principal:
         return ANONYMOUS
     token = authorization.split(" ", 1)[1].strip()
     try:
-        import jwt
-
         options: Options = {"verify_aud": settings.jwt_audience is not None}
+        key: object
         if settings.jwt_jwks_url:
-            jwk_client = jwt.PyJWKClient(settings.jwt_jwks_url)
-            key = jwk_client.get_signing_key_from_jwt(token).key
+            key = _jwk_client(settings.jwt_jwks_url).get_signing_key_from_jwt(token).key
         else:
             key = settings.jwt_secret
         claims = jwt.decode(
             token,
-            key,
+            key,  # type: ignore[arg-type]  # str secret or a cryptography public key
             algorithms=settings.jwt_algorithms,
             audience=settings.jwt_audience,
             issuer=settings.jwt_issuer,
@@ -82,4 +90,12 @@ def internal_key_ok(provided: str | None) -> bool:
         return True
     if not provided:
         return False
-    return hmac.compare_digest(provided, expected)
+    return hmac.compare_digest(provided.encode(), expected.encode())
+
+
+def require_internal_key(x_internal_key: str | None = Header(default=None)) -> None:
+    """FastAPI dependency enforcing ``OBS_INTERNAL_API_KEY`` on internal routes."""
+    # Pre-existing bug fixed: internal_key_ok existed but no route called it, so
+    # OBS_INTERNAL_API_KEY had no effect.
+    if not internal_key_ok(x_internal_key):
+        raise HTTPException(status_code=401, detail="invalid internal key")

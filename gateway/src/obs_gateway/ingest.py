@@ -25,6 +25,7 @@ from pydantic import (
 from .auth import Principal, principal_from_bearer
 from .config import settings
 from .emit import SEVERITY, emitter
+from .metrics import INGEST_EVENTS
 
 router = APIRouter(prefix="/api/telemetry/v1", tags=["telemetry"])
 
@@ -185,6 +186,7 @@ async def ingest(
     for event in batch.events:
         body = event.message or event.error or event.type
         if _is_duplicate(_signature(event, body, principal, ip)):
+            INGEST_EVENTS.labels(outcome="duplicate").inc()
             continue
         attributes: dict[str, str | None] = {
             "telemetry.type": event.type,
@@ -206,4 +208,5 @@ async def ingest(
             span_id=event.span_id,
             attributes=attributes,
         )
+        INGEST_EVENTS.labels(outcome="accepted").inc()
     return Response(status_code=204)

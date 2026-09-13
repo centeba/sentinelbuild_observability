@@ -38,8 +38,9 @@ class Settings(BaseSettings):
     jwt_company_claim: str = "org_id"
     jwt_user_claim: str = "sub"
 
-    # Optional shared secret required on service->gateway (non-frontend) calls,
-    # checked with a constant-time compare. Unset => that guard is open.
+    # Optional shared secret required on service->gateway (non-frontend) calls
+    # (currently GET /status), sent as X-Internal-Key and checked with a
+    # constant-time compare. Unset => that guard is open.
     internal_api_key: str | None = None
 
     # Fleet health aggregation: {name: base_url}. Probed at "<base_url><path>".
