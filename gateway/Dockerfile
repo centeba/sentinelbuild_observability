@@ -23,5 +23,6 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import os,urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:'+os.environ.get('PORT','8080')+'/health', timeout=4).status==200 else 1)"
 
-# Honour Railway/K8s injected $PORT (fallback 8080 for local/compose).
-CMD ["sh", "-c", "uvicorn obs_gateway.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+# Honour Railway/K8s injected $PORT (fallback 8080 for local/compose). exec so
+# uvicorn is PID 1 and receives SIGTERM.
+CMD ["sh", "-c", "exec uvicorn obs_gateway.main:app --host 0.0.0.0 --port ${PORT:-8080}"]
