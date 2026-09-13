@@ -1,15 +1,15 @@
 """Frontend telemetry ingest: validate -> enrich -> forward as OTLP logs.
 
 Public-friendly (crashes happen pre-login) but hardened: strict Pydantic caps on
-every field and on the whole event, a batch-size cap, per-IP rate limiting, and
-short-window dedupe so a client error loop can't flood the pipeline. Never
+every field and on the whole event, a batch-size cap, per-client rate limiting,
+and short-window dedupe so a client error loop can't flood the pipeline. Never
 fails the caller because of the downstream pipeline — telemetry is
 fire-and-forget.
 """
 
 import hashlib
 import time
-from collections import defaultdict, deque
+from collections import deque
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Header, Request
@@ -22,7 +22,7 @@ from pydantic import (
     model_validator,
 )
 
-from .auth import principal_from_bearer
+from .auth import Principal, principal_from_bearer
 from .config import settings
 from .emit import SEVERITY, emitter
 
@@ -33,6 +33,9 @@ ContextKey = Annotated[str, StringConstraints(min_length=1, max_length=128)]
 ContextValue = Annotated[str, StringConstraints(max_length=1024)]
 
 MAX_CONTEXT_ENTRIES = 32
+RATE_WINDOW_SECONDS = 60.0
+# Above this many tracked keys, expired entries are pruned on the next call.
+MAX_TRACKED_KEYS = 4096
 
 
 def _hex_id(value: object, length: int) -> object:
@@ -101,15 +104,20 @@ class TelemetryBatch(BaseModel):
         return v
 
 
-# ── per-IP fixed-window rate limit + short-window dedupe (in-memory) ──────────
-_hits: dict[str, deque[float]] = defaultdict(deque)
+# ── per-client sliding-window rate limit + short-window dedupe (in-memory) ─────
+# State is per process: with N gateway replicas the effective limits are N×.
+_hits: dict[str, deque[float]] = {}
 _recent: dict[str, float] = {}
 
 
 def _rate_limited(client_ip: str) -> bool:
     now = time.monotonic()
-    window = _hits[client_ip]
-    while window and now - window[0] > 60.0:
+    if len(_hits) > MAX_TRACKED_KEYS:
+        # Pre-existing bug fixed: one deque per client IP was kept forever.
+        for ip in [ip for ip, w in _hits.items() if not w or now - w[-1] > RATE_WINDOW_SECONDS]:
+            del _hits[ip]
+    window = _hits.setdefault(client_ip, deque())
+    while window and now - window[0] > RATE_WINDOW_SECONDS:
         window.popleft()
     if len(window) >= settings.rate_limit_per_min:
         return True
@@ -119,21 +127,39 @@ def _rate_limited(client_ip: str) -> bool:
 
 def _is_duplicate(signature: str) -> bool:
     now = time.monotonic()
-    # opportunistic cleanup so the map can't grow unbounded
-    if len(_recent) > 4096:
+    if len(_recent) > MAX_TRACKED_KEYS:
         cutoff = now - settings.dedupe_window_seconds
         for k in [k for k, t in _recent.items() if t < cutoff]:
-            _recent.pop(k, None)
+            del _recent[k]
+        if len(_recent) > MAX_TRACKED_KEYS:
+            # Everything is still in-window: forget rather than grow unbounded
+            # (worst case a duplicate slips through).
+            _recent.clear()
     last = _recent.get(signature)
     _recent[signature] = now
     return last is not None and (now - last) < settings.dedupe_window_seconds
 
 
 def _client_ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    peer = request.client.host if request.client else "unknown"
+    hops = settings.trusted_proxy_hops
+    if hops <= 0:
+        # Pre-existing bug fixed: X-Forwarded-For was trusted unconditionally,
+        # so a directly-reachable gateway's rate limit could be evaded.
+        return peer
+    forwarded = [p.strip() for p in request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
+    if not forwarded:
+        return peer
+    # Each trusted proxy appends the address it received from; the client is
+    # the entry `hops` positions from the right.
+    return forwarded[-hops] if len(forwarded) >= hops else forwarded[0]
+
+
+def _signature(event: TelemetryEvent, body: str, principal: Principal, client_ip: str) -> str:
+    # Pre-existing bug fixed: the signature ignored who sent the event, so the
+    # same error from two tenants inside the window was recorded once.
+    who = f"{principal.company_id}|{principal.user_id}" if principal.authenticated else client_ip
+    return hashlib.sha256(f"{who}|{event.type}|{body}|{event.stack or ''}".encode()).hexdigest()
 
 
 @router.post(
@@ -158,8 +184,7 @@ async def ingest(
     principal = principal_from_bearer(authorization)
     for event in batch.events:
         body = event.message or event.error or event.type
-        sig = hashlib.sha256(f"{event.type}|{body}|{event.stack or ''}".encode()).hexdigest()
-        if _is_duplicate(sig):
+        if _is_duplicate(_signature(event, body, principal, ip)):
             continue
         attributes: dict[str, str | None] = {
             "telemetry.type": event.type,

@@ -45,12 +45,14 @@ def test_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OBS_CORS_ALLOW_ORIGINS", "https://a.example, https://b.example")
     monkeypatch.setenv("OBS_JWT_ALGORITHMS", '["RS256"]')
     monkeypatch.setenv("OBS_HEALTH_TARGETS", '{"users": "http://users:8000"}')
+    monkeypatch.setenv("OBS_TRUSTED_PROXY_HOPS", "1")
     monkeypatch.setenv("OBS_MAX_EVENT_BYTES", "1000")
     monkeypatch.setenv("OBS_MAX_BATCH_EVENTS", "5")
     loaded = Settings()
     assert loaded.cors_allow_origins == ["https://a.example", "https://b.example"]
     assert loaded.jwt_algorithms == ["RS256"]
     assert loaded.health_targets == {"users": "http://users:8000"}
+    assert loaded.trusted_proxy_hops == 1
     assert loaded.max_request_bytes == 5000
 
 
