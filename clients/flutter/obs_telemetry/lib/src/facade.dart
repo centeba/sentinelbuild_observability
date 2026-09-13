@@ -24,6 +24,8 @@ class Telemetry {
     TelemetryLevel level = TelemetryLevel.info,
     Map<String, String>? context,
     String? url,
+    String? traceId,
+    String? spanId,
   }) {
     _client?.enqueue(TelemetryEvent(
       type: 'log',
@@ -31,6 +33,8 @@ class Telemetry {
       message: message,
       context: context,
       url: url,
+      traceId: traceId,
+      spanId: spanId,
     ));
   }
 
@@ -47,6 +51,8 @@ class Telemetry {
     _client?.enqueue(TelemetryEvent(type: 'perf', message: name, context: context));
   }
 
+  /// Report an error. Pass the [traceId]/[spanId] of the failed backend call
+  /// (the values sent in its `traceparent` header) to link the two in Grafana.
   static void error(
     Object error, {
     StackTrace? stack,
@@ -54,6 +60,8 @@ class Telemetry {
     TelemetryLevel level = TelemetryLevel.error,
     Map<String, String>? context,
     String? url,
+    String? traceId,
+    String? spanId,
   }) {
     _client?.enqueue(TelemetryEvent(
       type: 'error',
@@ -63,6 +71,8 @@ class Telemetry {
       stack: stack?.toString(),
       context: context,
       url: url,
+      traceId: traceId,
+      spanId: spanId,
     ));
   }
 
