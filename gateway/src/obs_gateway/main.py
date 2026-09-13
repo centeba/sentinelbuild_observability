@@ -10,6 +10,8 @@ Self-contained FastAPI service:
 No host-platform imports; everything is driven by ``OBS_*`` env vars.
 """
 
+import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -24,6 +26,7 @@ from .emit import emitter
 from .health import router as health_router
 from .ingest import router as ingest_router
 from .metrics import metrics_response, record_request
+from .stack import fallback_log, stack_monitor
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 
@@ -64,10 +67,16 @@ class BodySizeLimit:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    monitor_task = asyncio.create_task(stack_monitor.run()) if settings.stack_targets else None
     yield
+    if monitor_task is not None:
+        monitor_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await monitor_task
     # Pre-existing bug fixed: providers were never shut down, so records still
     # batched at SIGTERM were lost.
     emitter.shutdown()
+    fallback_log.close()
 
 
 app = FastAPI(title="obs-gateway", version="0.2.0", lifespan=lifespan)

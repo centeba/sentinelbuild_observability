@@ -26,6 +26,7 @@ from .auth import Principal, principal_from_bearer
 from .config import settings
 from .emit import SEVERITY, emitter
 from .metrics import INGEST_EVENTS
+from .stack import fallback_log, stack_monitor
 
 router = APIRouter(prefix="/api/telemetry/v1", tags=["telemetry"])
 
@@ -208,5 +209,16 @@ async def ingest(
             span_id=event.span_id,
             attributes=attributes,
         )
+        if stack_monitor.fallback_active:
+            fallback_log.write_event(
+                {
+                    "service": f"frontend/{event.app}" if event.app else "frontend",
+                    "level": event.level,
+                    "body": body,
+                    "trace_id": event.trace_id,
+                    "span_id": event.span_id,
+                    "attributes": {k: v for k, v in attributes.items() if v is not None},
+                }
+            )
         INGEST_EVENTS.labels(outcome="accepted").inc()
     return Response(status_code=204)

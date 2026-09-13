@@ -22,15 +22,15 @@ x-logging: &logging
     max-file: "3"
 
 services:
-  # One-shot: creates the local log directory (LOCAL_LOG_DIR, default ./logs)
-  # writable by the non-root collector (uid 10001), then exits.
+  # One-shot: creates the local log directories (LOCAL_LOG_DIR, default ./logs)
+  # writable by the non-root gateway and collector (uid 10001), then exits.
   log-dir-init:
     image: busybox:1.36
     restart: "no"
     command:
       - sh
       - -c
-      - mkdir -p /logs/otel-collector && chown -R 10001:10001 /logs/otel-collector
+      - mkdir -p /logs/obs-gateway /logs/otel-collector && chown -R 10001:10001 /logs/obs-gateway /logs/otel-collector
     volumes:
       - ${LOCAL_LOG_DIR:-./logs}:/logs
 
@@ -47,11 +47,18 @@ services:
     environment:
       OBS_OTEL_ENDPOINT: http://otel-collector:4318
       OBS_ENVIRONMENT: ${ENVIRONMENT:-development}
+      # Stack-health records and (while the stack is unhealthy) frontend events.
+      OBS_FALLBACK_LOG_DIR: /var/log/obs
       PORT: "8080"
+    volumes:
+      - ${LOCAL_LOG_DIR:-./logs}/obs-gateway:/var/log/obs
     ports:
       - "127.0.0.1:8080:8080"
-    # HEALTHCHECK (GET /health) is defined in gateway/Dockerfile.
+    # HEALTHCHECK (GET /health) is defined in gateway/Dockerfile. The gateway
+    # also monitors the rest of the stack: GET /status/stack.
     depends_on:
+      log-dir-init:
+        condition: service_completed_successfully
       otel-collector:
         condition: service_started
 
@@ -74,7 +81,7 @@ services:
       - "127.0.0.1:4317:4317"
       - "127.0.0.1:4318:4318"
     # Distroless image (no shell/wget) — no container healthcheck possible;
-    # its health endpoint is :13133 on the compose network.
+    # its health endpoint (:13133) is probed by obs-gateway's stack monitor.
     depends_on:
       log-dir-init:
         condition: service_completed_successfully

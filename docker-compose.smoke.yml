@@ -41,4 +41,5 @@ services:
       OBS_JWT_ALGORITHMS: HS256
       OBS_INTERNAL_API_KEY: *internal_key
       OBS_RATE_LIMIT_PER_MIN: "60"
+      OBS_STACK_CHECK_INTERVAL_SECONDS: "3"
       OBS_HEALTH_TARGETS: '{"gateway": "http://obs-gateway:8080", "unreachable": "http://unreachable.invalid:8080"}'

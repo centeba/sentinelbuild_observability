@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 
 from .auth import require_internal_key
 from .config import settings
+from .stack import stack_monitor
 
 router = APIRouter(tags=["health"])
 
@@ -25,6 +26,16 @@ async def _probe(client: httpx.AsyncClient, name: str, base_url: str) -> dict[st
     except Exception as exc:
         return {"service": name, "ok": False, "error": type(exc).__name__}
     return {"service": name, "ok": resp.status_code == 200, "status_code": resp.status_code}
+
+
+@router.get("/status/stack", dependencies=[Depends(require_internal_key)])
+async def stack_status() -> JSONResponse:
+    """Health of the observability stack itself, from the background monitor.
+
+    503 when any component is unhealthy; ``unknown`` (200) before the first check.
+    """
+    snapshot = stack_monitor.snapshot()
+    return JSONResponse(snapshot, status_code=503 if snapshot["status"] == "degraded" else 200)
 
 
 @router.get("/status", dependencies=[Depends(require_internal_key)])
