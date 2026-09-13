@@ -1,0 +1,15 @@
+# Fallback mode "mirror": every log record is written to Loki AND to a
+# rotating local JSON file, whether or not the stack is healthy. Simplest and
+# nothing depends on failure detection; costs local disk (bounded by rotation).
+exporters:
+  file/logs:
+    path: /var/log/otelcol/logs.jsonl
+    format: json
+    rotation:
+      max_megabytes: ${env:COLLECTOR_FALLBACK_MAX_MB}
+      max_backups: ${env:COLLECTOR_FALLBACK_MAX_BACKUPS}
+
+service:
+  pipelines:
+    logs:
+      exporters: [otlp_http/loki, file/logs]

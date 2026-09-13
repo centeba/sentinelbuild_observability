@@ -2,6 +2,9 @@
 # Receives OTLP (gRPC 4317 / HTTP 4318) from services and from obs-gateway
 # (frontend telemetry), fanning out: logs -> Loki, traces -> Tempo,
 # metrics -> Prometheus (remote-write). Standalone; nothing host-specific.
+#
+# A local-file fallback overlay is merged on top of this file (see
+# fallback-*.yml, selected by COLLECTOR_FALLBACK_MODE in docker-compose.yml).
 receivers:
   otlp:
     protocols:
@@ -25,15 +28,15 @@ processors:
         action: insert
 
 exporters:
-  otlphttp/loki:
+  otlp_http/loki:
     endpoint: http://loki:3100/otlp
     tls:
       insecure: true
-  otlp/tempo:
+  otlp_grpc/tempo:
     endpoint: tempo:4317
     tls:
       insecure: true
-  prometheusremotewrite:
+  prometheus_remote_write:
     endpoint: http://prometheus:9090/api/v1/write
     resource_to_telemetry_conversion:
       enabled: true
@@ -48,15 +51,20 @@ service:
     logs:
       receivers: [otlp]
       processors: [memory_limiter, resource, batch]
-      exporters: [otlphttp/loki]
+      exporters: [otlp_http/loki]
     traces:
       receivers: [otlp]
       processors: [memory_limiter, resource, batch]
-      exporters: [otlp/tempo]
+      exporters: [otlp_grpc/tempo]
     metrics:
       receivers: [otlp]
       processors: [memory_limiter, resource, batch]
-      exporters: [prometheusremotewrite]
+      exporters: [prometheus_remote_write]
   telemetry:
     metrics:
-      address: 0.0.0.0:8888
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888

@@ -30,13 +30,11 @@ services:
     restart: always
     command:
       - "--config=/etc/otelcol/config.yml"
+      - "--config=/etc/otelcol/fallback-${COLLECTOR_FALLBACK_MODE:-failover}.yml"
       - "--config=/etc/otelcol/config.prod.yml"
     environment:
       ENVIRONMENT: production
       OTEL_INGEST_TOKEN: ${OTEL_INGEST_TOKEN:?set OTEL_INGEST_TOKEN}
-    volumes:
-      - ./otel-collector/config.yml:/etc/otelcol/config.yml:ro
-      - ./otel-collector/config.prod.yml:/etc/otelcol/config.prod.yml:ro
     ports: !override
       - "4317:4317"
       - "4318:4318"

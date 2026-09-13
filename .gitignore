@@ -15,3 +15,6 @@
 
 # Local data (if bind-mounted)
 **/data/
+
+# Local fallback / stack-health logs (LOCAL_LOG_DIR)
+logs/
