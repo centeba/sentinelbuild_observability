@@ -69,7 +69,7 @@ jobs:
       - run: flutter test
 
   stack:
-    name: Compose config + end-to-end and outage tests
+    name: Compose config + end-to-end, outage and RBAC tests
     runs-on: ubuntu-latest
     needs: [gateway]
     env:
@@ -85,6 +85,7 @@ jobs:
           docker compose config -q
           docker compose --profile demo config -q
           docker compose -f docker-compose.yml -f docker-compose.prod.yml config -q
+          docker compose -f docker-compose.yml -f docker-compose.secure.yml config -q
           docker compose -f docker-compose.test.yml config -q
           docker compose $SMOKE config -q
       - name: Validate collector configs (every fallback mode, with and without prod overlay)
@@ -101,9 +102,11 @@ jobs:
         run: docker compose $SMOKE run --rm --build smoke-test
       - name: Outage / local fallback test
         run: tests/smoke/outage_test.sh
+      - name: RBAC edge test
+        run: tests/smoke/rbac_edge_test.sh
       - name: Stack logs on failure
         if: failure()
-        run: docker compose $SMOKE logs --tail 200
+        run: docker compose $SMOKE -f docker-compose.secure.yml logs --tail 200
       - name: Tear down
         if: always()
-        run: docker compose $SMOKE down -v
+        run: docker compose $SMOKE -f docker-compose.secure.yml down -v

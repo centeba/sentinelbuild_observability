@@ -7,7 +7,7 @@ plain map, so the service spins off as a standalone project unchanged.
 """
 
 import json
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -38,8 +38,40 @@ class Settings(BaseSettings):
     jwt_company_claim: str = "org_id"
     jwt_user_claim: str = "sub"
 
+    # Claim holding the user's roles (list or space/comma-separated string).
+    jwt_roles_claim: str = "roles"
+
+    # RBAC (see authz.py). "none" keeps the pre-RBAC behaviour; "static" maps
+    # token roles to permissions below; "external" delegates every decision to
+    # an RBAC service at authz_url (the integration stub).
+    authz_mode: Literal["none", "static", "external"] = "none"
+    authz_role_permissions: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "obs-admin": ["*"],
+            "obs-editor": ["ui:access", "logs:read", "traces:read", "metrics:read", "status:read"],
+            "obs-viewer": ["ui:access", "logs:read", "traces:read", "metrics:read"],
+        }
+    )
+    # Token role -> Grafana org role, passed to Grafana by the edge proxy.
+    authz_grafana_roles: dict[str, str] = Field(
+        default_factory=lambda: {"obs-admin": "Admin", "obs-editor": "Editor", "obs-viewer": "Viewer"}
+    )
+    authz_url: str | None = None
+    authz_timeout_seconds: float = 2.0
+    # Forward-auth: first matching path prefix decides the action.
+    authz_route_actions: list[tuple[str, str]] = Field(
+        default_factory=lambda: [
+            ("/loki/", "logs:read"),
+            ("/tempo/", "traces:read"),
+            ("/prometheus/", "metrics:read"),
+            ("/", "ui:access"),
+        ]
+    )
+    # Cookie carrying the bearer token for browser access through the edge proxy.
+    authz_token_cookie: str = "obs_token"
+
     # Optional shared secret required on service->gateway (non-frontend) calls
-    # (GET /status, /status/stack), sent as X-Internal-Key and checked with a
+    # (currently GET /status), sent as X-Internal-Key and checked with a
     # constant-time compare. Unset => that guard is open.
     internal_api_key: str | None = None
 
@@ -89,7 +121,14 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
-    @field_validator("health_targets", "stack_targets", mode="before")
+    @field_validator(
+        "health_targets",
+        "stack_targets",
+        "authz_role_permissions",
+        "authz_grafana_roles",
+        "authz_route_actions",
+        mode="before",
+    )
     @classmethod
     def _parse_targets(cls, v: object) -> object:
         # Allow a JSON string in the env: OBS_HEALTH_TARGETS='{"user-master":"http://user-master:8000"}'

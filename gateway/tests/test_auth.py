@@ -20,7 +20,7 @@ def test_no_header_or_non_bearer_is_anonymous(jwt_secret: str) -> None:
 
 def test_hs256_claims(jwt_secret: str) -> None:
     principal = principal_from_bearer(f"Bearer {make_token({'org_id': 42, 'sub': 'u1'})}")
-    assert principal == auth.Principal(company_id="42", user_id="u1", authenticated=True)
+    assert principal == auth.Principal(company_id="42", user_id="u1", authenticated=True, roles=())
 
 
 def test_bearer_scheme_is_case_insensitive(jwt_secret: str) -> None:

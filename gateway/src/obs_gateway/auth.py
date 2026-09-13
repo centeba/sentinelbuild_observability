@@ -13,7 +13,6 @@ import logging
 from dataclasses import dataclass
 
 import jwt
-from fastapi import Header, HTTPException
 from jwt.types import Options
 
 from .config import settings
@@ -28,6 +27,7 @@ class Principal:
     company_id: str | None = None
     user_id: str | None = None
     authenticated: bool = False
+    roles: tuple[str, ...] = ()
 
 
 ANONYMOUS = Principal()
@@ -77,7 +77,16 @@ def principal_from_bearer(authorization: str | None) -> Principal:
         company_id=str(company) if company is not None else None,
         user_id=str(user) if user is not None else None,
         authenticated=True,
+        roles=_roles(claims.get(settings.jwt_roles_claim)),
     )
+
+
+def _roles(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return tuple(r for r in value.replace(",", " ").split() if r)
+    if isinstance(value, list | tuple):
+        return tuple(str(r) for r in value)
+    return ()
 
 
 def internal_key_ok(provided: str | None) -> bool:
@@ -91,11 +100,3 @@ def internal_key_ok(provided: str | None) -> bool:
     if not provided:
         return False
     return hmac.compare_digest(provided.encode(), expected.encode())
-
-
-def require_internal_key(x_internal_key: str | None = Header(default=None)) -> None:
-    """FastAPI dependency enforcing ``OBS_INTERNAL_API_KEY`` on internal routes."""
-    # Pre-existing bug fixed: internal_key_ok existed but no route called it, so
-    # OBS_INTERNAL_API_KEY had no effect.
-    if not internal_key_ok(x_internal_key):
-        raise HTTPException(status_code=401, detail="invalid internal key")

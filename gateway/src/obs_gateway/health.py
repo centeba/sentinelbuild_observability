@@ -3,7 +3,7 @@
 ``GET /status`` concurrently probes every configured service's readiness endpoint
 and returns a per-service + rollup view. Targets are plain config
 (``OBS_HEALTH_TARGETS`` = ``{name: base_url}``), so this works for any fleet.
-Guarded by ``OBS_INTERNAL_API_KEY`` when set.
+Guarded by ``OBS_INTERNAL_API_KEY`` and, when RBAC is enabled, ``status:read``.
 """
 
 import asyncio
@@ -12,7 +12,7 @@ import httpx
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
-from .auth import require_internal_key
+from .authz import require_action
 from .config import settings
 from .stack import stack_monitor
 
@@ -28,7 +28,7 @@ async def _probe(client: httpx.AsyncClient, name: str, base_url: str) -> dict[st
     return {"service": name, "ok": resp.status_code == 200, "status_code": resp.status_code}
 
 
-@router.get("/status/stack", dependencies=[Depends(require_internal_key)])
+@router.get("/status/stack", dependencies=[Depends(require_action("status:read"))])
 async def stack_status() -> JSONResponse:
     """Health of the observability stack itself, from the background monitor.
 
@@ -38,7 +38,7 @@ async def stack_status() -> JSONResponse:
     return JSONResponse(snapshot, status_code=503 if snapshot["status"] == "degraded" else 200)
 
 
-@router.get("/status", dependencies=[Depends(require_internal_key)])
+@router.get("/status", dependencies=[Depends(require_action("status:read"))])
 async def status() -> JSONResponse:
     """Aggregate readiness across the configured fleet."""
     targets = settings.health_targets
