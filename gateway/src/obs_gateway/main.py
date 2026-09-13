@@ -9,24 +9,70 @@ Self-contained FastAPI service:
 No host-platform imports; everything is driven by ``OBS_*`` env vars.
 """
 
-from __future__ import annotations
-
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .config import settings
+from .emit import emitter
 from .health import router as health_router
 from .ingest import router as ingest_router
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 
-app = FastAPI(title="obs-gateway", version="0.1.0")
 
+class BodySizeLimit:
+    """Reject request bodies over ``settings.max_request_bytes`` with 413.
+
+    Checks Content-Length up front and also counts streamed (chunked) bytes.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        limit = settings.max_request_bytes
+        declared = dict(scope["headers"]).get(b"content-length")
+        if declared is not None and declared.isdigit() and int(declared) > limit:
+            response = JSONResponse({"detail": "request body too large"}, status_code=413)
+            await response(scope, receive, send)
+            return
+
+        received = 0
+
+        async def limited_receive() -> Message:
+            nonlocal received
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > limit:
+                    raise HTTPException(status_code=413, detail="request body too large")
+            return message
+
+        await self.app(scope, limited_receive, send)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    yield
+    # Pre-existing bug fixed: providers were never shut down, so records still
+    # batched at SIGTERM were lost.
+    emitter.shutdown()
+
+
+app = FastAPI(title="obs-gateway", version="0.2.0", lifespan=lifespan)
+
+# Last added is outermost: CORS -> body-size limit -> routes.
+app.add_middleware(BodySizeLimit)
 if settings.cors_allow_origins:
-    from fastapi.middleware.cors import CORSMiddleware
-
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allow_origins,
