@@ -1,0 +1,76 @@
+# Production override. Use together with the base file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Differences from the base (development) stack:
+#   - Required secrets: startup fails if GRAFANA_ADMIN_PASSWORD, OTEL_INGEST_TOKEN
+#     or OBS_INTERNAL_API_KEY is unset (no admin/admin, no open ingest).
+#   - OTLP ingest requires a bearer token and listens on all interfaces so
+#     services on other hosts can send; put TLS in front (load balancer / proxy).
+#   - Loki, Tempo and Prometheus are not published at all; Grafana and the
+#     gateway stay on loopback for a TLS-terminating reverse proxy.
+#   - The gateway trusts one proxy hop for client IPs and runs in production mode.
+#   - Resource limits, restart: always.
+name: observability
+
+services:
+  obs-gateway:
+    restart: always
+    environment:
+      OBS_ENVIRONMENT: production
+      OBS_TRUSTED_PROXY_HOPS: ${OBS_TRUSTED_PROXY_HOPS:-1}
+      OBS_INTERNAL_API_KEY: ${OBS_INTERNAL_API_KEY:?set OBS_INTERNAL_API_KEY}
+      # Picked up by the OTLP exporter to authenticate to the collector.
+      OTEL_EXPORTER_OTLP_HEADERS: Authorization=Bearer%20${OTEL_INGEST_TOKEN:?set OTEL_INGEST_TOKEN}
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+
+  otel-collector:
+    restart: always
+    command:
+      - "--config=/etc/otelcol/config.yml"
+      - "--config=/etc/otelcol/config.prod.yml"
+    environment:
+      ENVIRONMENT: production
+      OTEL_INGEST_TOKEN: ${OTEL_INGEST_TOKEN:?set OTEL_INGEST_TOKEN}
+    volumes:
+      - ./otel-collector/config.yml:/etc/otelcol/config.yml:ro
+      - ./otel-collector/config.prod.yml:/etc/otelcol/config.prod.yml:ro
+    ports: !override
+      - "4317:4317"
+      - "4318:4318"
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 2G }
+
+  loki:
+    restart: always
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 4G }
+
+  tempo:
+    restart: always
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 4G }
+
+  prometheus:
+    restart: always
+    ports: !reset []
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 4G }
+
+  grafana:
+    restart: always
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD}
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://127.0.0.1:3000}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_COOKIE_SECURE: "true"
+      GF_SECURITY_DISABLE_GRAVATAR: "true"
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 1G }
