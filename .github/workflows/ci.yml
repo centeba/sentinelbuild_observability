@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gateway:
+    name: Gateway (ruff, mypy --strict, pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose -f docker-compose.test.yml run --rm --build gateway-tests
+
+  react-client:
+    name: React client (eslint, typecheck, vitest, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/react/obs-telemetry
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: clients/react/obs-telemetry/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  react-demo:
+    name: React demo (eslint, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci && npm run build
+        working-directory: clients/react/obs-telemetry
+      - run: npm ci && npm run lint && npm run build
+        working-directory: examples/react-demo
+
+  flutter-client:
+    name: Flutter client (analyze, test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clients/flutter/obs_telemetry
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.41.6
+          channel: stable
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
+  stack:
+    name: Compose config + end-to-end smoke test
+    runs-on: ubuntu-latest
+    needs: [gateway]
+    env:
+      SMOKE: -f docker-compose.yml -f docker-compose.smoke.yml
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate compose files
+        env:
+          GRAFANA_ADMIN_PASSWORD: ci
+          OTEL_INGEST_TOKEN: ci
+          OBS_INTERNAL_API_KEY: ci
+        run: |
+          docker compose config -q
+          docker compose --profile demo config -q
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml config -q
+          docker compose -f docker-compose.test.yml config -q
+          docker compose $SMOKE config -q
+      - name: Validate collector configs
+        run: |
+          docker run --rm -v "$PWD/otel-collector:/cfg:ro" -e ENVIRONMENT=ci -e OTEL_INGEST_TOKEN=ci \
+            otel/opentelemetry-collector-contrib:0.109.0 \
+            validate --config=/cfg/config.yml --config=/cfg/config.prod.yml
+      - name: Build React demo image
+        run: docker build -f examples/react-demo/Dockerfile -t obs-react-demo .
+      - name: Smoke test
+        run: docker compose $SMOKE run --rm --build smoke-test
+      - name: Stack logs on failure
+        if: failure()
+        run: docker compose $SMOKE logs --tail 200
+      - name: Tear down
+        if: always()
+        run: docker compose $SMOKE down -v

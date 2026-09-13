@@ -1,0 +1,44 @@
+# End-to-end smoke test. Merged with the base file; starts the whole stack with
+# test settings on the gateway, runs tests/smoke/smoke_test.py, exits non-zero
+# on any failed check:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.smoke.yml run --rm --build smoke-test
+#   docker compose -f docker-compose.yml -f docker-compose.smoke.yml down -v
+name: observability
+
+x-smoke:
+  jwt_secret: &jwt_secret smoke-test-secret-at-least-32-bytes-long
+  internal_key: &internal_key smoke-internal-key
+
+services:
+  smoke-test:
+    build:
+      context: ./tests/smoke
+      dockerfile_inline: |
+        FROM python:3.12-slim
+        RUN pip install --no-cache-dir httpx "pyjwt>=2.10" \
+            "opentelemetry-sdk>=1.44,<2" "opentelemetry-exporter-otlp-proto-http>=1.44,<2"
+        COPY smoke_test.py /smoke_test.py
+        CMD ["python", "/smoke_test.py"]
+    image: obs-smoke:test
+    environment:
+      SMOKE_JWT_SECRET: *jwt_secret
+      SMOKE_INTERNAL_KEY: *internal_key
+      SMOKE_RATE_LIMIT: "60"
+      GRAFANA_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GRAFANA_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+    depends_on:
+      obs-gateway:
+        condition: service_healthy
+      grafana:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+
+  obs-gateway:
+    environment:
+      OBS_JWT_SECRET: *jwt_secret
+      OBS_JWT_ALGORITHMS: HS256
+      OBS_INTERNAL_API_KEY: *internal_key
+      OBS_RATE_LIMIT_PER_MIN: "60"
+      OBS_HEALTH_TARGETS: '{"gateway": "http://obs-gateway:8080", "unreachable": "http://unreachable.invalid:8080"}'

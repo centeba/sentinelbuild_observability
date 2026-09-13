@@ -1,0 +1,40 @@
+# Test runners in Docker — nothing needs to be installed locally and no stack is
+# started:
+#
+#   docker compose -f docker-compose.test.yml run --rm --build gateway-tests         # ruff, mypy, pytest
+#   docker compose -f docker-compose.test.yml run --rm --build react-client-tests    # eslint, tsc, vitest, build
+#   docker compose -f docker-compose.test.yml run --rm --build flutter-client-tests  # analyze, test
+#
+# The end-to-end smoke test against the running stack is docker-compose.smoke.yml.
+name: observability-test
+
+services:
+  gateway-tests:
+    build:
+      context: ./gateway
+      target: test
+    image: obs-gateway:test
+
+  react-client-tests:
+    build:
+      context: ./clients/react/obs-telemetry
+      dockerfile_inline: |
+        FROM node:22-alpine
+        WORKDIR /pkg
+        COPY package.json package-lock.json ./
+        RUN npm ci --no-audit --no-fund
+        COPY . .
+        CMD ["sh", "-c", "npm run lint && npm run typecheck && npm test && npm run build"]
+    image: obs-react-client:test
+
+  flutter-client-tests:
+    build:
+      context: ./clients/flutter/obs_telemetry
+      dockerfile_inline: |
+        FROM ghcr.io/cirruslabs/flutter:3.41.6
+        WORKDIR /pkg
+        COPY pubspec.yaml ./
+        RUN flutter pub get
+        COPY . .
+        CMD ["sh", "-c", "flutter analyze && flutter test"]
+    image: obs-flutter-client:test
