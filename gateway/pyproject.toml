@@ -1,6 +1,6 @@
 [project]
 name = "obs-gateway"
-version = "0.1.0"
+version = "0.2.0"
 description = "Self-contained observability gateway: frontend/app telemetry ingest + fleet health aggregation, forwarding to an OTLP collector."
 license = { text = "MIT" }
 requires-python = ">=3.11,<4.0"

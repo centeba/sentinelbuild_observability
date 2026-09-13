@@ -47,7 +47,8 @@ class Settings(BaseSettings):
     health_path: str = "/healthz"
     health_timeout_seconds: float = 3.0
 
-    # Ingest hardening.
+    # Ingest hardening. A request body may be at most
+    # max_batch_events * max_event_bytes bytes.
     max_event_bytes: int = 16_384
     max_batch_events: int = 100
     rate_limit_per_min: int = 600  # per client ip
@@ -75,6 +76,10 @@ class Settings(BaseSettings):
                 return json.loads(s)
             return [item.strip() for item in s.split(",") if item.strip()]
         return v
+
+    @property
+    def max_request_bytes(self) -> int:
+        return self.max_batch_events * self.max_event_bytes
 
 
 settings = Settings()

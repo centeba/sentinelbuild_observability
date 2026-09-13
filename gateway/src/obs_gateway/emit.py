@@ -3,87 +3,119 @@
 The gateway is stateless: it validates + enriches browser/app events and emits
 them as OTEL log records to the configured collector, which routes them to Loki.
 Standard OTLP only — swap ``OBS_OTEL_ENDPOINT`` for any OTLP-compatible backend.
+
+Each client ``app`` gets its own resource ``service.name`` (``frontend/<app>``),
+so frontend logs are filterable per app like any backend service. The number of
+per-app resources is bounded; overflow apps are recorded under ``frontend``.
 """
 
 import logging
 import time
-from typing import Any
+from collections.abc import Callable
 
 # Pre-existing bug fixed: LogRecord was imported lazily from
 # opentelemetry.sdk._logs, which current SDK releases (verified on 1.44) no
 # longer export. The ImportError was swallowed, so every ingested event was
 # dropped with "otlp_emit_failed" while the client still got 204.
-from opentelemetry._logs import LogRecord, SeverityNumber
+from opentelemetry._logs import Logger, LogRecord, SeverityNumber
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
-from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk._logs import LoggerProvider, LogRecordProcessor
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
+from opentelemetry.trace import TraceFlags
 
 from .config import settings
 
 logger = logging.getLogger(__name__)
 
-_SEVERITY = {
-    "trace": SeverityNumber.TRACE,
-    "debug": SeverityNumber.DEBUG,
-    "info": SeverityNumber.INFO,
-    "warn": SeverityNumber.WARN,
-    "warning": SeverityNumber.WARN,
-    "error": SeverityNumber.ERROR,
-    "fatal": SeverityNumber.FATAL,
-    "critical": SeverityNumber.FATAL,
+# level (lower-case) -> (OTEL severity number, canonical severity text)
+SEVERITY: dict[str, tuple[SeverityNumber, str]] = {
+    "trace": (SeverityNumber.TRACE, "TRACE"),
+    "debug": (SeverityNumber.DEBUG, "DEBUG"),
+    "info": (SeverityNumber.INFO, "INFO"),
+    "warn": (SeverityNumber.WARN, "WARNING"),
+    "warning": (SeverityNumber.WARN, "WARNING"),
+    "error": (SeverityNumber.ERROR, "ERROR"),
+    "fatal": (SeverityNumber.FATAL, "CRITICAL"),
+    "critical": (SeverityNumber.FATAL, "CRITICAL"),
 }
 
+FALLBACK_SERVICE = "frontend"
+MAX_APP_SERVICES = 32
 
-class _Emitter:
-    """Lazily-built OTEL log emitter; logs to stdout if no endpoint is configured
-    so the gateway still runs and the request still succeeds."""
 
-    def __init__(self) -> None:
-        self._provider: LoggerProvider | None = None
-        self._logger: Any | None = None
-        self._ready = False
+def _otlp_processor() -> LogRecordProcessor:
+    return BatchLogRecordProcessor(OTLPLogExporter(endpoint=f"{settings.otel_endpoint}/v1/logs"))
 
-    def _ensure(self) -> None:
-        if self._ready:
-            return
-        self._ready = True
-        if not settings.otel_endpoint:
-            return
-        resource = Resource.create(
-            {
-                "service.name": "frontend-telemetry",
-                "deployment.environment": settings.environment,
-            }
-        )
-        provider = LoggerProvider(resource=resource)
-        exporter = OTLPLogExporter(endpoint=f"{settings.otel_endpoint}/v1/logs")
-        provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
-        self._provider = provider
-        self._logger = provider.get_logger("obs-gateway.client")
 
-    def emit(self, *, body: str, severity: str, attributes: dict[str, Any]) -> None:
-        self._ensure()
-        if self._logger is None:
-            # Fallback: structured line to stdout (still collected if the host
-            # ships stdout). Keeps ingest working with no collector wired.
-            logger.info("client_telemetry body=%s attrs=%s", body, attributes)
-            return
-        try:
-            now = time.time_ns()
-            record = LogRecord(
-                timestamp=now,
-                observed_timestamp=now,
-                # Pre-existing bug fixed: a plain int was passed, which the OTLP
-                # encoder silently exports as severity 0 (unspecified).
-                severity_number=_SEVERITY.get(severity.lower(), SeverityNumber.INFO),
-                severity_text=severity.upper(),
-                body=body,
-                attributes={k: v for k, v in attributes.items() if v is not None},
+class Emitter:
+    """Emits client events as OTEL log records, one LoggerProvider per app.
+
+    Falls back to a structured stdout line when no collector endpoint is
+    configured, so ingest keeps working with nothing wired.
+    """
+
+    def __init__(self, processor_factory: Callable[[], LogRecordProcessor] = _otlp_processor) -> None:
+        self._processor_factory = processor_factory
+        self._providers: dict[str, LoggerProvider] = {}
+        self._loggers: dict[str, Logger] = {}
+
+    def _logger_for(self, app: str | None) -> Logger:
+        service = f"{FALLBACK_SERVICE}/{app}" if app else FALLBACK_SERVICE
+        if service not in self._loggers and len(self._loggers) >= MAX_APP_SERVICES:
+            service = FALLBACK_SERVICE
+        existing = self._loggers.get(service)
+        if existing is not None:
+            return existing
+        provider = LoggerProvider(
+            resource=Resource.create(
+                {"service.name": service, "deployment.environment": settings.environment}
             )
-            self._logger.emit(record)
-        except Exception as exc:  # defensive; never fail ingest
+        )
+        provider.add_log_record_processor(self._processor_factory())
+        new_logger = provider.get_logger("obs-gateway.client")
+        self._providers[service] = provider
+        self._loggers[service] = new_logger
+        return new_logger
+
+    def emit(
+        self,
+        *,
+        app: str | None,
+        body: str,
+        level: str,
+        trace_id: str | None,
+        span_id: str | None,
+        attributes: dict[str, str | None],
+    ) -> None:
+        clean = {k: v for k, v in attributes.items() if v is not None}
+        if not settings.otel_endpoint:
+            logger.info("client_telemetry app=%s level=%s body=%s attrs=%s", app, level, body, clean)
+            return
+        severity_number, severity_text = SEVERITY[level]
+        now = time.time_ns()
+        record = LogRecord(
+            timestamp=now,
+            observed_timestamp=now,
+            trace_id=int(trace_id, 16) if trace_id else None,
+            span_id=int(span_id, 16) if span_id else None,
+            trace_flags=TraceFlags(TraceFlags.SAMPLED) if trace_id else None,
+            severity_number=severity_number,
+            severity_text=severity_text,
+            body=body,
+            attributes=clean,
+        )
+        try:
+            self._logger_for(app).emit(record)
+        except Exception as exc:  # never fail ingest because telemetry export failed
             logger.warning("otlp_emit_failed: %s", exc)
 
+    def shutdown(self) -> None:
+        """Flush buffered records and stop exporters (called on app shutdown)."""
+        for provider in self._providers.values():
+            provider.shutdown()
+        self._providers.clear()
+        self._loggers.clear()
 
-emitter = _Emitter()
+
+emitter = Emitter()
