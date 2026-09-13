@@ -11,6 +11,7 @@ dependencies = [
     "pydantic-settings>=2.7.0",
     "httpx>=0.27.0",
     "pyjwt[crypto]>=2.10.0",
+    "prometheus-client>=0.20.0",
     "opentelemetry-sdk>=1.44.0,<2",
     "opentelemetry-exporter-otlp-proto-http>=1.44.0,<2",
 ]
@@ -46,5 +47,5 @@ select = ["E", "W", "F", "I", "B", "UP"]
 ignore = ["E501", "B008"]  # B008: FastAPI Depends/Header defaults
 
 [tool.pytest.ini_options]
-addopts = "--cov=obs_gateway --cov-report=term-missing --cov-fail-under=60"
+addopts = "--cov=obs_gateway --cov-report=term-missing --cov-fail-under=90"
 pythonpath = ["src"]

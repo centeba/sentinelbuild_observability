@@ -6,7 +6,7 @@
 **/.venv/
 **/venv/
 **/*.egg-info/
-tests/
+**/.coverage
 .env
 .env.*
 !.env.example

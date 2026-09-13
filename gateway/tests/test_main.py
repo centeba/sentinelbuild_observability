@@ -1,4 +1,4 @@
-"""App wiring: request-size limit and env configuration parsing."""
+"""App wiring: request-size limit, /metrics, and env configuration parsing."""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -39,6 +39,18 @@ def test_body_at_limit_is_processed(client: TestClient, captured: list[Emitted],
     body = b'{"events": []}'
     resp = client.post(INGEST, content=body.ljust(small_limit), headers={"content-type": "application/json"})
     assert resp.status_code == 204
+
+
+def test_metrics_endpoint(client: TestClient, captured: list[Emitted]) -> None:
+    client.post(INGEST, json={"events": [{"message": "counted"}]})
+    text = client.get("/metrics").text
+    assert 'http_request_duration_seconds_count{method="POST",route="/api/telemetry/v1/ingest",status="204"}' in text
+    assert 'obs_ingest_events_total{outcome="accepted"}' in text
+
+
+def test_unmatched_route_label(client: TestClient) -> None:
+    assert client.get("/nope").status_code == 404
+    assert 'route="unmatched",status="404"' in client.get("/metrics").text
 
 
 def test_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:

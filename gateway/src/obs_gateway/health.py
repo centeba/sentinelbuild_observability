@@ -3,20 +3,17 @@
 ``GET /status`` concurrently probes every configured service's readiness endpoint
 and returns a per-service + rollup view. Targets are plain config
 (``OBS_HEALTH_TARGETS`` = ``{name: base_url}``), so this works for any fleet.
+Guarded by ``OBS_INTERNAL_API_KEY`` when set.
 """
 
-from __future__ import annotations
-
 import asyncio
-import logging
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
+from .auth import require_internal_key
 from .config import settings
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["health"])
 
@@ -25,29 +22,30 @@ async def _probe(client: httpx.AsyncClient, name: str, base_url: str) -> dict[st
     url = base_url.rstrip("/") + settings.health_path
     try:
         resp = await client.get(url, timeout=settings.health_timeout_seconds)
-        ok = resp.status_code == 200
-        return {"service": name, "ok": ok, "status_code": resp.status_code}
     except Exception as exc:
         return {"service": name, "ok": False, "error": type(exc).__name__}
+    return {"service": name, "ok": resp.status_code == 200, "status_code": resp.status_code}
 
 
-@router.get("/status")
+@router.get("/status", dependencies=[Depends(require_internal_key)])
 async def status() -> JSONResponse:
     """Aggregate readiness across the configured fleet."""
     targets = settings.health_targets
     if not targets:
-        return JSONResponse({"status": "ok", "services": [], "note": "no targets configured"})
+        return JSONResponse(
+            {"status": "ok", "healthy": 0, "total": 0, "services": [], "note": "no targets configured"}
+        )
 
     async with httpx.AsyncClient() as client:
         results = await asyncio.gather(
             *(_probe(client, name, url) for name, url in targets.items())
         )
-    healthy = all(r["ok"] for r in results)
+    healthy = sum(1 for r in results if r["ok"])
     return JSONResponse(
-        status_code=200 if healthy else 503,
+        status_code=200 if healthy == len(results) else 503,
         content={
-            "status": "ok" if healthy else "degraded",
-            "healthy": sum(1 for r in results if r["ok"]),
+            "status": "ok" if healthy == len(results) else "degraded",
+            "healthy": healthy,
             "total": len(results),
             "services": sorted(results, key=lambda r: str(r["service"])),
         },
