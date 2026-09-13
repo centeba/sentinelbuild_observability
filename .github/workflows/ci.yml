@@ -87,11 +87,14 @@ jobs:
           docker compose -f docker-compose.yml -f docker-compose.prod.yml config -q
           docker compose -f docker-compose.test.yml config -q
           docker compose $SMOKE config -q
-      - name: Validate collector configs
+      - name: Validate collector configs (every fallback mode, with and without prod overlay)
         run: |
-          docker run --rm -v "$PWD/otel-collector:/cfg:ro" -e ENVIRONMENT=ci -e OTEL_INGEST_TOKEN=ci \
-            otel/opentelemetry-collector-contrib:0.109.0 \
-            validate --config=/cfg/config.yml --config=/cfg/config.prod.yml
+          for mode in failover mirror queue; do
+            docker run --rm -v "$PWD/otel-collector:/cfg:ro" -e ENVIRONMENT=ci -e OTEL_INGEST_TOKEN=ci \
+              -e COLLECTOR_FALLBACK_MAX_MB=50 -e COLLECTOR_FALLBACK_MAX_BACKUPS=5 \
+              otel/opentelemetry-collector-contrib:0.160.0 \
+              validate --config=/cfg/config.yml --config=/cfg/fallback-$mode.yml --config=/cfg/config.prod.yml
+          done
       - name: Build React demo image
         run: docker build -f examples/react-demo/Dockerfile -t obs-react-demo .
       - name: Smoke test

@@ -1,0 +1,27 @@
+# Fallback mode "queue": exports to Loki and Tempo are buffered in a persistent
+# on-disk queue. While a store is unreachable data accumulates under
+# /var/log/otelcol/queue and is replayed when it recovers — nothing is lost
+# across outages or collector restarts, but the buffer is not human-readable.
+extensions:
+  file_storage/queue:
+    directory: /var/log/otelcol/queue
+    create_directory: true
+
+exporters:
+  otlp_http/loki:
+    sending_queue:
+      enabled: true
+      storage: file_storage/queue
+    retry_on_failure:
+      enabled: true
+      max_elapsed_time: 0  # retry until the store is back
+  otlp_grpc/tempo:
+    sending_queue:
+      enabled: true
+      storage: file_storage/queue
+    retry_on_failure:
+      enabled: true
+      max_elapsed_time: 0
+
+service:
+  extensions: [health_check, file_storage/queue]
