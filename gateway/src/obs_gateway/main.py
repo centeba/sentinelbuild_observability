@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from .authz import router as authz_router
 from .config import settings
 from .emit import emitter
 from .health import router as health_router
@@ -95,6 +96,7 @@ if settings.cors_allow_origins:
 
 app.include_router(ingest_router)
 app.include_router(health_router)
+app.include_router(authz_router)
 
 
 @app.get("/health", include_in_schema=False)
