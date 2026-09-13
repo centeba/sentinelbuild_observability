@@ -1,0 +1,9 @@
+# Build context for images built from the repo root (examples/react-demo).
+.git
+**/node_modules
+**/dist
+**/coverage
+**/.dart_tool
+**/__pycache__
+**/.venv
+.env

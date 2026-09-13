@@ -88,6 +88,21 @@ services:
       - loki
       - tempo
 
+  # ── demo profile: React demo app, same-origin proxy to the gateway ─────────
+  #   docker compose --profile demo up -d   ->  http://127.0.0.1:5173
+  react-demo:
+    profiles: [demo]
+    build:
+      context: .
+      dockerfile: examples/react-demo/Dockerfile
+    image: obs-react-demo:local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5173:8080"
+    depends_on:
+      obs-gateway:
+        condition: service_healthy
+
 volumes:
   loki-data:
   tempo-data:
