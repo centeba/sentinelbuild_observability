@@ -1,78 +1,92 @@
 # Observability Platform
 
-A self-contained, end-to-end observability stack — **logs, metrics, traces, and
-frontend RUM** — for a fleet of services and their web/mobile frontends. Runs
-standalone with one `docker compose up`, talks to apps only over **standard
-OTLP**, and is designed to be spun off into its own open-source repository (this
-directory is self-contained: no imports from any host platform).
+A self-contained, end-to-end observability stack for a fleet of services and their web/mobile frontends, covering:
+
+- logs, metrics, traces and frontend RUM,
+- built-in health checks, with local log files when the stack is unhealthy,
+- an RBAC seam for securing the UI and data access.
+
+It runs standalone with one `docker compose up`, talks to apps only over **standard OTLP**, and is designed to be spun off as its own open-source project.
 
 ## What's in the box
 
 | Component | Role |
 |---|---|
-| **obs-gateway** (`gateway/`) | Stateless FastAPI service: ingests **frontend/app** telemetry (RUM, errors, logs), enriches it (tenant/user from an optional JWT), and forwards it to the collector as OTLP. Also aggregates **fleet health** (`GET /status`). The trust boundary browsers talk to. |
-| **OTEL Collector** | Single OTLP ingest (gRPC 4317 / HTTP 4318) → fans out to the three stores. |
-| **Loki** | Log store. |
-| **Tempo** | Trace store. |
-| **Prometheus** | Metrics store (scrape + OTLP remote-write). |
-| **Grafana** | Single pane; datasources pre-wired with **trace↔log correlation**. |
+| **obs-gateway** (`gateway/`) | Stateless FastAPI service. It ingests frontend telemetry, enriches it with tenant and user from an optional JWT, and forwards it as OTLP. It also aggregates fleet health (`/status`), monitors the stack itself (`/status/stack`), writes local fallback logs, and makes RBAC decisions (`/authz/verify`). |
+| **OTEL Collector 0.160** | Single OTLP ingest → Loki, Tempo, Prometheus. When Loki is unreachable, logs fail over to a local file (modes `failover`, `mirror`, `queue`). |
+| **Loki / Tempo / Prometheus** | Log, trace and metric stores (Tempo's metrics-generator powers the service graph). |
+| **Grafana** | One pane with trace↔log correlation. |
+| **obs-edge** (`edge/`, secure overlay) | nginx forward-auth proxy in front of Grafana and the store APIs. |
+| **Clients** | `clients/react/obs-telemetry` (React/browser) and `clients/flutter/obs_telemetry` (Flutter). |
+| **Demo** | `examples/react-demo`: React app wired to the gateway through a same-origin proxy. |
 
 ## Quick start
 
 ```bash
-cd observability
 cp .env.example .env          # change Grafana admin creds before any non-local run
 docker compose up -d
 ```
 
-- Grafana → http://127.0.0.1:3000 (default `admin`/`admin`)
-- Gateway → http://127.0.0.1:8080 (`/health`, `/status`, `/api/telemetry/v1/ingest`)
-- Prometheus → http://127.0.0.1:9090
+| URL | What |
+|---|---|
+| <http://127.0.0.1:3000> | Grafana (`admin`/`admin`) |
+| <http://127.0.0.1:8080/status/stack> | Health of every stack component |
+| <http://127.0.0.1:9090> | Prometheus |
+| `127.0.0.1:4317` / `127.0.0.1:4318` | OTLP gRPC / HTTP for your services |
 
-## Integrate your services (emit)
+Try the demo app with `docker compose --profile demo up -d`, then open <http://127.0.0.1:5173>.
 
-Point any OTEL-instrumented service at the collector — nothing platform-specific:
+## Integrate
+
+- **Backend services:** set `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318` (any OTEL SDK).
+- **Frontends:** use the React or Flutter client, or `POST /api/telemetry/v1/ingest` with `{"events": [...]}` through a same-origin proxy. Attach `Authorization: Bearer <jwt>` to enrich events with tenant and user.
+
+## Compose files
+
+| File | Use |
+|---|---|
+| `docker-compose.yml` | Development stack (plus the `demo` profile) |
+| `docker-compose.prod.yml` | Production: required secrets, OTLP token auth, resource limits |
+| `docker-compose.secure.yml` | RBAC-secured UI and log/trace/metric access through `obs-edge` |
+| `docker-compose.test.yml` | Unit tests and linters in Docker |
+| `docker-compose.smoke.yml` | End-to-end smoke, outage and RBAC tests |
+
+## When the stack is unhealthy
+
+The gateway probes the collector, Loki, Tempo, Prometheus and Grafana every 15 s. Health changes are written to `logs/obs-gateway/stack-health.jsonl`. While the collector, Loki or Grafana is down, frontend events also go to `logs/obs-gateway/events.jsonl`, and backend logs go to `logs/otel-collector/logs.jsonl`. The directory is set with `LOCAL_LOG_DIR`.
+
+## Tests and lint
 
 ```bash
-OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+docker compose -f docker-compose.test.yml run --rm --build gateway-tests
+docker compose -f docker-compose.yml -f docker-compose.smoke.yml run --rm --build smoke-test
 ```
 
-Metrics can be scraped by adding the service to `prometheus/prometheus.yml`, or
-pushed as OTLP through the collector.
+CI (`.github/workflows/ci.yml`) runs:
 
-## Integrate your frontend (RUM)
+- the gateway suite (ruff, mypy, pytest),
+- the React suite (ESLint, tsc, vitest) and the Flutter suite (analyze, test),
+- hadolint, yamllint and markdownlint,
+- config validation,
+- the smoke, outage and RBAC edge tests.
 
-Send batched client events to the gateway (same-origin, via your app's reverse
-proxy is recommended — see `docs/DESIGN.md`):
+## Documentation
 
-```
-POST /api/telemetry/v1/ingest
-{ "events": [ { "type": "error", "level": "error", "message": "...", "stack": "...", "url": "...", "app": "web" } ] }
-```
-
-Attach `Authorization: Bearer <jwt>` when the user is logged in and the gateway
-will enrich events with tenant/user; anonymous (pre-login) events are accepted too.
-
-## Logging levels
-
-Everything is level-aware and env-configurable — see the "Logging levels" section
-of [`docs/DESIGN.md`](docs/DESIGN.md). The gateway's own verbosity is
-`OBS_LOG_LEVEL` (`DEBUG|INFO|WARNING|ERROR|CRITICAL`); ingested client events
-carry a per-event `level` mapped to OTEL severity.
-
-## Configuration
-
-All gateway settings use the `OBS_` prefix; see [`.env.example`](.env.example)
-for the full list. Requirements and design live in [`docs/`](docs/).
+- [Requirements](docs/REQUIREMENTS.md)
+- [Technical design](docs/DESIGN.md)
+- [User manual](docs/USER_MANUAL.md)
+- [Test cases](docs/TEST_CASES.md)
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE). The gateway and client code in this repo are MIT.
+MIT — see [`LICENSE`](LICENSE). The gateway, clients and demo in this repo are MIT.
 
 ### Third-party components
 
-The bundled stack runs upstream Docker images under their own licenses (used
-unmodified, not vendored): **OpenTelemetry Collector** and **Prometheus**
-(Apache-2.0); **Grafana**, **Loki**, and **Tempo** (AGPL-3.0). Running these
-unmodified images imposes no license obligation on your own code; obligations
-attach only if you modify and redistribute them.
+The stack runs upstream Docker images unmodified, under their own licenses:
+
+- **OpenTelemetry Collector** and **Prometheus**: Apache-2.0
+- **Grafana**, **Loki** and **Tempo**: AGPL-3.0
+- **nginx**: BSD-2-Clause
+
+Running unmodified images imposes no license obligation on your own code.
