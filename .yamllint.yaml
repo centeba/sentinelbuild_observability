@@ -1,0 +1,25 @@
+---
+extends: default
+
+ignore: |
+  **/node_modules/
+  **/.dart_tool/
+  **/pubspec.lock
+  logs/
+
+rules:
+  document-start: disable
+  new-lines: disable  # line endings are normalised to LF by .gitattributes
+  line-length:
+    max: 120
+  braces:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+  brackets:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: disable  # allow commented-out example blocks
+  truthy:
+    check-keys: false  # GitHub Actions `on:`

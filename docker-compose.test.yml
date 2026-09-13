@@ -1,9 +1,13 @@
-# Test runners in Docker — nothing needs to be installed locally and no stack is
-# started:
+# Test and lint runners in Docker — nothing needs to be installed locally and no
+# stack is started:
 #
 #   docker compose -f docker-compose.test.yml run --rm --build gateway-tests         # ruff, mypy, pytest
 #   docker compose -f docker-compose.test.yml run --rm --build react-client-tests    # eslint, tsc, vitest, build
+#   docker compose -f docker-compose.test.yml run --rm --build react-demo-lint       # eslint, tsc
 #   docker compose -f docker-compose.test.yml run --rm --build flutter-client-tests  # analyze, test
+#   docker compose -f docker-compose.test.yml run --rm lint-dockerfiles              # hadolint
+#   docker compose -f docker-compose.test.yml run --rm lint-yaml                     # yamllint
+#   docker compose -f docker-compose.test.yml run --rm lint-markdown                 # markdownlint
 #
 # The end-to-end smoke test against the running stack is docker-compose.smoke.yml.
 name: observability-test
@@ -27,6 +31,23 @@ services:
         CMD ["sh", "-c", "npm run lint && npm run typecheck && npm test && npm run build"]
     image: obs-react-client:test
 
+  react-demo-lint:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM node:22-alpine
+        WORKDIR /src/clients/react/obs-telemetry
+        COPY clients/react/obs-telemetry/package.json clients/react/obs-telemetry/package-lock.json ./
+        RUN npm ci --no-audit --no-fund
+        COPY clients/react/obs-telemetry/ ./
+        RUN npm run build
+        WORKDIR /src/examples/react-demo
+        COPY examples/react-demo/package.json examples/react-demo/package-lock.json ./
+        RUN npm ci --no-audit --no-fund
+        COPY examples/react-demo/ ./
+        CMD ["sh", "-c", "npm run lint && npx tsc --noEmit"]
+    image: obs-react-demo:lint
+
   flutter-client-tests:
     build:
       context: ./clients/flutter/obs_telemetry
@@ -38,3 +59,20 @@ services:
         COPY . .
         CMD ["sh", "-c", "flutter analyze && flutter test"]
     image: obs-flutter-client:test
+
+  lint-dockerfiles:
+    image: hadolint/hadolint:v2.12.0-debian
+    working_dir: /src
+    volumes: [".:/src:ro"]
+    command: ["hadolint", "gateway/Dockerfile", "examples/react-demo/Dockerfile"]
+
+  lint-yaml:
+    image: cytopia/yamllint:1.26
+    working_dir: /data
+    volumes: [".:/data:ro"]
+    command: ["-f", "parsable", "."]
+
+  lint-markdown:
+    image: davidanson/markdownlint-cli2:v0.18.1
+    working_dir: /workdir
+    volumes: [".:/workdir:ro"]

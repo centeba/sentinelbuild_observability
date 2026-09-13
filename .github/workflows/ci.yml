@@ -68,6 +68,15 @@ jobs:
       - run: flutter analyze
       - run: flutter test
 
+  lint:
+    name: Lint (hadolint, yamllint, markdownlint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose -f docker-compose.test.yml run --rm lint-dockerfiles
+      - run: docker compose -f docker-compose.test.yml run --rm lint-yaml
+      - run: docker compose -f docker-compose.test.yml run --rm lint-markdown
+
   stack:
     name: Compose config + end-to-end, outage and RBAC tests
     runs-on: ubuntu-latest
