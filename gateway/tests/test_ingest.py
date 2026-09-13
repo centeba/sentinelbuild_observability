@@ -1,8 +1,12 @@
 """POST /api/telemetry/v1/ingest — validation, enrichment, dedupe, rate limit."""
 
+import time
+from collections import deque
+
 import pytest
 from fastapi.testclient import TestClient
 
+from obs_gateway import ingest
 from obs_gateway.config import settings
 
 from .conftest import INGEST, Emitted, make_token
@@ -150,6 +154,37 @@ def test_dedupe_window_expires(
     assert len(captured) == 2
 
 
+def test_dedupe_is_per_tenant(client: TestClient, captured: list[Emitted], jwt_secret: str) -> None:
+    ev = {"type": "error", "message": "same"}
+    for org in ("acme", "globex"):
+        token = make_token({"org_id": org, "sub": "u1"})
+        assert post(client, ev, headers={"authorization": f"Bearer {token}"}) == 204
+    assert [e.attributes["company_id"] for e in captured] == ["acme", "globex"]
+
+
+def test_dedupe_is_per_anonymous_client(
+    client: TestClient, captured: list[Emitted], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 1)
+    ev = {"message": "same"}
+    assert post(client, ev, headers={"x-forwarded-for": "10.0.0.1"}) == 204
+    assert post(client, ev, headers={"x-forwarded-for": "10.0.0.2"}) == 204
+    assert post(client, ev, headers={"x-forwarded-for": "10.0.0.2"}) == 204
+    assert len(captured) == 2
+
+
+def test_dedupe_map_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ingest, "MAX_TRACKED_KEYS", 3)
+    now = time.monotonic()
+    ingest._recent.update({"old1": now - 999, "old2": now - 999, "fresh1": now, "fresh2": now})
+    ingest._is_duplicate("new")
+    assert set(ingest._recent) == {"fresh1", "fresh2", "new"}
+
+    ingest._recent.update({f"f{i}": now for i in range(5)})
+    ingest._is_duplicate("newest")
+    assert set(ingest._recent) == {"newest"}  # all in-window: cleared, not grown
+
+
 # ── rate limit ────────────────────────────────────────────────────────────────
 
 
@@ -165,6 +200,48 @@ def test_rate_limited_batch_is_not_forwarded(
     assert post(client, {"message": "a"}) == 204
     assert post(client, {"message": "b"}) == 429
     assert [e.body for e in captured] == ["a"]
+
+
+def test_rate_limit_ignores_forwarded_for_by_default(
+    client: TestClient, captured: list[Emitted], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "rate_limit_per_min", 2)
+    codes = [post(client, headers={"x-forwarded-for": f"203.0.113.{i}"}) for i in range(3)]
+    assert codes == [204, 204, 429]  # spoofed header does not create new clients
+
+
+def test_rate_limit_uses_trusted_proxy_hop(
+    client: TestClient, captured: list[Emitted], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "rate_limit_per_min", 1)
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 1)
+    # Client-supplied first entries vary; the proxy-appended last entry is the client.
+    assert post(client, headers={"x-forwarded-for": "1.1.1.1, 198.51.100.7"}) == 204
+    assert post(client, headers={"x-forwarded-for": "9.9.9.9, 198.51.100.7"}) == 429
+    assert post(client, headers={"x-forwarded-for": "198.51.100.8"}) == 204
+
+
+def test_client_ip_with_two_trusted_hops(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "trusted_proxy_hops", 2)
+
+    class _Req:
+        def __init__(self, xff: str) -> None:
+            self.headers = {"x-forwarded-for": xff}
+            self.client = type("C", (), {"host": "172.16.0.1"})()
+
+    assert ingest._client_ip(_Req("198.51.100.7")) == "198.51.100.7"  # type: ignore[arg-type]
+    assert ingest._client_ip(_Req("")) == "172.16.0.1"  # type: ignore[arg-type]
+    assert ingest._client_ip(_Req("a, b, c")) == "b"  # type: ignore[arg-type]
+
+
+def test_rate_limit_map_is_pruned(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ingest, "MAX_TRACKED_KEYS", 2)
+    now = time.monotonic()
+    ingest._hits.update(
+        {"stale": deque([now - 120]), "empty": deque(), "live": deque([now])}
+    )
+    ingest._rate_limited("new")
+    assert set(ingest._hits) == {"live", "new"}
 
 
 # ── enrichment ────────────────────────────────────────────────────────────────

@@ -51,8 +51,13 @@ class Settings(BaseSettings):
     # max_batch_events * max_event_bytes bytes.
     max_event_bytes: int = 16_384
     max_batch_events: int = 100
-    rate_limit_per_min: int = 600  # per client ip
+    rate_limit_per_min: int = 600  # requests per client ip, sliding 60 s window
     dedupe_window_seconds: float = 10.0
+
+    # Number of reverse proxies in front of the gateway whose X-Forwarded-For
+    # entries are trusted. 0 => ignore the header and use the socket peer, so a
+    # directly-exposed gateway cannot be rate-limit-evaded by header spoofing.
+    trusted_proxy_hops: int = 0
 
     # CORS. Default empty => rely on the host's same-origin proxy (recommended).
     cors_allow_origins: Annotated[list[str], NoDecode] = Field(default_factory=list)
