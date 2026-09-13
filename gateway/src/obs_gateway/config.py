@@ -6,12 +6,11 @@ is driven by configurable JWT claim names, and the health-probe targets are a
 plain map, so the service spins off as a standalone project unchanged.
 """
 
-from __future__ import annotations
-
 import json
+from typing import Annotated
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -29,7 +28,10 @@ class Settings(BaseSettings):
     # happen pre-login); otherwise everything is anonymous.
     jwt_secret: str | None = None
     jwt_jwks_url: str | None = None
-    jwt_algorithms: list[str] = Field(default_factory=lambda: ["HS256", "RS256"])
+    # NoDecode: pydantic-settings would otherwise JSON-decode list env values and
+    # fail on the documented comma-separated form (e.g. "HS256,RS256") — a
+    # pre-existing startup crash; _parse_list accepts both forms.
+    jwt_algorithms: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["HS256", "RS256"])
     jwt_audience: str | None = None
     jwt_issuer: str | None = None
     # Claim names to read tenant/user from (configurable so any IdP fits).
@@ -52,7 +54,7 @@ class Settings(BaseSettings):
     dedupe_window_seconds: float = 10.0
 
     # CORS. Default empty => rely on the host's same-origin proxy (recommended).
-    cors_allow_origins: list[str] = Field(default_factory=list)
+    cors_allow_origins: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     log_level: str = "INFO"
 

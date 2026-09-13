@@ -7,11 +7,11 @@ gated by a shared internal key. Nothing here is host-specific — claim names an
 keys are configuration.
 """
 
-from __future__ import annotations
-
 import hmac
 import logging
 from dataclasses import dataclass
+
+from jwt.types import Options
 
 from .config import settings
 
@@ -45,7 +45,7 @@ def principal_from_bearer(authorization: str | None) -> Principal:
     try:
         import jwt
 
-        options = {"verify_aud": settings.jwt_audience is not None}
+        options: Options = {"verify_aud": settings.jwt_audience is not None}
         if settings.jwt_jwks_url:
             jwk_client = jwt.PyJWKClient(settings.jwt_jwks_url)
             key = jwk_client.get_signing_key_from_jwt(token).key
