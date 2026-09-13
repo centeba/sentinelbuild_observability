@@ -1,9 +1,13 @@
-"""App wiring: request-size limit, /metrics, and env configuration parsing."""
+"""App wiring: request-size limit, /metrics, lifespan, and env configuration parsing."""
+
+import asyncio
 
 import pytest
 from fastapi.testclient import TestClient
 
+from obs_gateway import stack
 from obs_gateway.config import Settings, settings
+from obs_gateway.main import app
 
 from .conftest import INGEST, Emitted
 
@@ -60,12 +64,29 @@ def test_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OBS_TRUSTED_PROXY_HOPS", "1")
     monkeypatch.setenv("OBS_MAX_EVENT_BYTES", "1000")
     monkeypatch.setenv("OBS_MAX_BATCH_EVENTS", "5")
+    monkeypatch.setenv("OBS_STACK_TARGETS", '{"loki": "http://loki:3100/ready"}')
+    monkeypatch.setenv("OBS_FALLBACK_TRIGGER_COMPONENTS", "loki, grafana")
     loaded = Settings()
+    assert loaded.stack_targets == {"loki": "http://loki:3100/ready"}
+    assert loaded.fallback_trigger_components == ["loki", "grafana"]
     assert loaded.cors_allow_origins == ["https://a.example", "https://b.example"]
     assert loaded.jwt_algorithms == ["RS256"]
     assert loaded.health_targets == {"users": "http://users:8000"}
     assert loaded.trusted_proxy_hops == 1
     assert loaded.max_request_bytes == 5000
+
+
+def test_lifespan_starts_and_stops_stack_monitor(monkeypatch: pytest.MonkeyPatch) -> None:
+    started: list[bool] = []
+
+    async def fake_run() -> None:
+        started.append(True)
+        await asyncio.Event().wait()  # until cancelled on shutdown
+
+    monkeypatch.setattr(stack.stack_monitor, "run", fake_run)
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200
+    assert started == [True]
 
 
 def test_settings_single_algorithm_plain_string(monkeypatch: pytest.MonkeyPatch) -> None:

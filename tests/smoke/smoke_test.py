@@ -189,6 +189,18 @@ def main() -> int:
         by_name = {s["service"]: s["ok"] for s in body["services"]}
         assert body["status"] == "degraded" and by_name == {"gateway": True, "unreachable": False}, body
 
+    def stack_status_healthy() -> None:
+        def get() -> None:
+            resp = http.get(f"{GATEWAY}/status/stack", headers={"x-internal-key": INTERNAL_KEY})
+            body = resp.json()
+            names = {c["component"] for c in body["components"]}
+            assert resp.status_code == 200 and body["status"] == "ok", body
+            assert names == {"otel-collector", "loki", "tempo", "prometheus", "grafana"}, names
+            assert body["fallback_active"] is False, body
+
+        eventually(get, timeout=60)
+
+    check("NFR-10 /status/stack reports every stack component healthy", stack_status_healthy)
     check("NFR-3 /status requires the internal key", status_requires_key)
     check("AC-6 /status reports an unreachable dependency as degraded (503)", status_degraded)
 

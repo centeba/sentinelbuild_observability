@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     jwt_user_claim: str = "sub"
 
     # Optional shared secret required on service->gateway (non-frontend) calls
-    # (currently GET /status), sent as X-Internal-Key and checked with a
+    # (GET /status, /status/stack), sent as X-Internal-Key and checked with a
     # constant-time compare. Unset => that guard is open.
     internal_api_key: str | None = None
 
@@ -47,6 +47,30 @@ class Settings(BaseSettings):
     health_targets: dict[str, str] = Field(default_factory=dict)
     health_path: str = "/healthz"
     health_timeout_seconds: float = 3.0
+
+    # Stack health monitor: {component: health URL}, probed every interval.
+    # Empty => monitor disabled. Defaults match docker-compose.yml.
+    stack_targets: dict[str, str] = Field(
+        default_factory=lambda: {
+            "otel-collector": "http://otel-collector:13133/",
+            "loki": "http://loki:3100/ready",
+            "tempo": "http://tempo:3200/ready",
+            "prometheus": "http://prometheus:9090/-/ready",
+            "grafana": "http://grafana:3000/api/health",
+        }
+    )
+    stack_check_interval_seconds: float = 15.0
+    # While any of these components is unhealthy, ingested frontend events are
+    # also written to the local fallback log.
+    fallback_trigger_components: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["otel-collector", "loki", "grafana"]
+    )
+
+    # Local fallback log files (events.jsonl, stack-health.jsonl), rotated.
+    # Empty => no local files.
+    fallback_log_dir: str = ""
+    fallback_log_max_bytes: int = 10_485_760
+    fallback_log_backup_count: int = 5
 
     # Ingest hardening. A request body may be at most
     # max_batch_events * max_event_bytes bytes.
@@ -65,7 +89,7 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
-    @field_validator("health_targets", mode="before")
+    @field_validator("health_targets", "stack_targets", mode="before")
     @classmethod
     def _parse_targets(cls, v: object) -> object:
         # Allow a JSON string in the env: OBS_HEALTH_TARGETS='{"user-master":"http://user-master:8000"}'
@@ -73,7 +97,7 @@ class Settings(BaseSettings):
             return json.loads(v)
         return v
 
-    @field_validator("jwt_algorithms", "cors_allow_origins", mode="before")
+    @field_validator("jwt_algorithms", "cors_allow_origins", "fallback_trigger_components", mode="before")
     @classmethod
     def _parse_list(cls, v: object) -> object:
         if isinstance(v, str) and v.strip():
