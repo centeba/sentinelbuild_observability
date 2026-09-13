@@ -1,0 +1,6 @@
+---
+ignored:
+  # `pip install .` installs this repo's own package; its dependencies are
+  # constrained in gateway/pyproject.toml, not pinned on the pip command line.
+  - DL3013
+failure-threshold: warning

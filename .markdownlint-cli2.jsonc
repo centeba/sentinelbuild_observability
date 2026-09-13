@@ -1,0 +1,11 @@
+{
+  "config": {
+    "default": true,
+    // Prose and wide reference tables: wrapping would hurt readability.
+    "MD013": false,
+    // Tables of contents and cross-references use repeated sub-headings per section.
+    "MD024": { "siblings_only": true }
+  },
+  "globs": ["**/*.md"],
+  "ignores": ["**/node_modules/**", "**/.dart_tool/**", "logs/**"]
+}

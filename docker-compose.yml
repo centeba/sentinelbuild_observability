@@ -9,7 +9,7 @@
 #
 # Production: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 # RBAC:       add -f docker-compose.secure.yml (UI and data access through obs-edge)
-# Tests:      docker-compose.test.yml (unit tests), docker-compose.smoke.yml (end-to-end)
+# Tests:      docker-compose.test.yml (unit tests, lint), docker-compose.smoke.yml (end-to-end)
 # Profile "demo": React demo app on http://127.0.0.1:5173 (docker compose --profile demo up -d)
 #
 # Config files are bind-mounted from this repo into each container, e.g.
