@@ -23,6 +23,12 @@ class TelemetryClient {
   final Map<String, DateTime> _recent = {};
   Timer? _timer;
   bool _started = false;
+  Future<void>? _inFlight;
+
+  int get _batchSize => config.maxBatch.clamp(1, IngestLimits.maxBatchEvents);
+
+  /// Events waiting to be sent (including ones re-queued for retry).
+  int get pending => _queue.length;
 
   void start() {
     if (_started || !config.enabled) return;
@@ -45,31 +51,67 @@ class TelemetryClient {
       );
     }
     _queue.add(event);
-    if (_queue.length >= config.maxBatch) {
+    _trimQueue();
+    if (_queue.length >= _batchSize) {
       unawaited(flush());
     }
   }
 
-  /// Send everything queued (up to a sane cap per call). Safe to call anytime,
-  /// including from lifecycle hooks (visibility/unload).
-  Future<void> flush() async {
-    if (_queue.isEmpty) return;
-    final batch = List<TelemetryEvent>.from(_queue);
-    _queue.clear();
-    try {
-      String? token;
-      if (config.getToken != null) {
-        token = await config.getToken!();
+  void _trimQueue() {
+    if (_queue.length > config.maxQueue) {
+      _queue.removeRange(0, _queue.length - config.maxQueue);
+    }
+  }
+
+  /// Send everything queued, in gateway-sized chunks. Safe to call anytime,
+  /// including from lifecycle hooks. Failed chunks that may succeed later
+  /// (network error, timeout, 429, 5xx) are re-queued; rejected ones (other
+  /// 4xx) are dropped.
+  ///
+  /// While a flush is in flight, callers get that same future, so awaiting
+  /// `flush()` always waits for delivery to finish.
+  Future<void> flush() {
+    final inFlight = _inFlight;
+    if (inFlight != null) return inFlight;
+    if (_queue.isEmpty) return Future<void>.value();
+    return _inFlight = _drain().whenComplete(() => _inFlight = null);
+  }
+
+  Future<void> _drain() async {
+    final token = await _token();
+    while (_queue.isNotEmpty) {
+      final chunk = _queue.take(_batchSize).toList();
+      _queue.removeRange(0, chunk.length);
+      final done = await _send(chunk, token);
+      if (!done) {
+        _queue.insertAll(0, chunk);
+        _trimQueue();
+        return; // retry on the next flush
       }
+    }
+  }
+
+  Future<String?> _token() async {
+    try {
+      return await config.getToken?.call();
+    } catch (_) {
+      // Pre-existing bug fixed: a throwing getToken dropped the whole batch.
+      // Send anonymously instead — the gateway accepts it.
+      return null;
+    }
+  }
+
+  /// True when the chunk is done with (delivered, or permanently rejected).
+  Future<bool> _send(List<TelemetryEvent> chunk, String? token) async {
+    try {
       final body = jsonEncode({
-        'events': batch
+        'events': chunk
             .map((e) => e.toJson(app: config.app, appVersion: config.appVersion))
             .toList(),
       });
-      final uri = Uri.parse('${config.endpoint}/api/telemetry/v1/ingest');
-      await _http
+      final response = await _http
           .post(
-            uri,
+            Uri.parse('${config.endpoint}/api/telemetry/v1/ingest'),
             headers: {
               'content-type': 'application/json',
               if (token != null && token.isNotEmpty)
@@ -78,8 +120,10 @@ class TelemetryClient {
             body: body,
           )
           .timeout(const Duration(seconds: 4));
+      final code = response.statusCode;
+      return !(code == 429 || code >= 500);
     } catch (_) {
-      // Fire-and-forget: drop on failure rather than recurse or grow unbounded.
+      return false;
     }
   }
 

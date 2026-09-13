@@ -19,4 +19,9 @@ export 'src/client.dart' show TelemetryClient;
 export 'src/facade.dart' show Telemetry;
 export 'src/handlers.dart' show installErrorHandlers, runGuarded;
 export 'src/models.dart'
-    show TelemetryConfig, TelemetryEvent, TelemetryLevel, TelemetryLevelName;
+    show
+        IngestLimits,
+        TelemetryConfig,
+        TelemetryEvent,
+        TelemetryLevel,
+        TelemetryLevelName;
