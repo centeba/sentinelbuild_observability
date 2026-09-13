@@ -1,0 +1,25 @@
+# Production overlay for the OTEL Collector — merged on top of config.yml:
+#
+#   otelcol --config=/etc/otelcol/config.yml --config=/etc/otelcol/config.prod.yml
+#
+# Requires a bearer token on every OTLP request (gRPC and HTTP). Senders set
+# OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer%20<token>".
+extensions:
+  bearertokenauth:
+    scheme: Bearer
+    token: ${env:OTEL_INGEST_TOKEN}
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+        auth:
+          authenticator: bearertokenauth
+      http:
+        endpoint: 0.0.0.0:4318
+        auth:
+          authenticator: bearertokenauth
+
+service:
+  extensions: [health_check, bearertokenauth]
